@@ -140,6 +140,15 @@ type WebShellConfig struct {
 	Password string `json:"password"`
 }
 
+type LoginToken struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Username    string `json:"username"`
+	AuthType    string `json:"authType"`
+	SecretKey   string `json:"secretKey"`
+	Description string `json:"description"`
+}
+
 var (
 	db     *sql.DB
 	dbMu   sync.Mutex
@@ -239,6 +248,14 @@ func createTables() error {
 			position_x INTEGER,
 			position_y INTEGER,
 			connections TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS login_tokens (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			username TEXT NOT NULL,
+			auth_type TEXT DEFAULT 'password',
+			secret_key TEXT,
+			description TEXT
 		)`,
 	}
 
@@ -345,6 +362,28 @@ func initDefaultData() error {
 		}
 	}
 
+	db.QueryRow("SELECT COUNT(*) FROM login_tokens").Scan(&count)
+	if count == 0 {
+		tokens := []struct {
+			ID          string
+			Name        string
+			Username    string
+			AuthType    string
+			SecretKey   string
+			Description string
+		}{
+			{"1", "核心交换机登录凭据", "admin", "password", "Cisco123!", "主要核心交换机的 SSH 登录密码"},
+			{"2", "汇聚交换机密钥", "root", "key", "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtcn\nNhAAAAAwEAAQAAAYEA0G55GvZzcmRiaW5kaW5nMzIyMDExc3NoLWtleXMxMTIyMzMz\n-----END OPENSSH PRIVATE KEY-----", "局域网 Linux 服务器及汇聚设备 SSH 登录私钥"},
+		}
+		for _, t := range tokens {
+			_, err := db.Exec("INSERT INTO login_tokens (id, name, username, auth_type, secret_key, description) VALUES (?, ?, ?, ?, ?, ?)",
+				t.ID, t.Name, t.Username, t.AuthType, t.SecretKey, t.Description)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -388,6 +427,9 @@ func main() {
 
 	http.HandleFunc("/api/users", usersHandler)
 	http.HandleFunc("/api/users/", userHandler)
+
+	http.HandleFunc("/api/tokens", tokensHandler)
+	http.HandleFunc("/api/tokens/", tokenHandler)
 
 	http.HandleFunc("/api/system-config/test-influxdb", testInfluxDBConnectionHandler)
 	http.HandleFunc("/api/system-config", systemConfigHandler)
@@ -1343,4 +1385,100 @@ func deviceInterfacesHandler(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(interfaces)
 }
+
+func tokensHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method == http.MethodGet {
+		rows, err := db.Query("SELECT id, name, username, auth_type, secret_key, description FROM login_tokens")
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		defer rows.Close()
+
+		tokens := []LoginToken{}
+		for rows.Next() {
+			var t LoginToken
+			rows.Scan(&t.ID, &t.Name, &t.Username, &t.AuthType, &t.SecretKey, &t.Description)
+			tokens = append(tokens, t)
+		}
+		json.NewEncoder(w).Encode(tokens)
+	} else if r.Method == http.MethodPost {
+		var req LoginToken
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
+			return
+		}
+
+		req.ID = strconv.Itoa(getNextID())
+		_, err := db.Exec("INSERT INTO login_tokens (id, name, username, auth_type, secret_key, description) VALUES (?, ?, ?, ?, ?, ?)",
+			req.ID, req.Name, req.Username, req.AuthType, req.SecretKey, req.Description)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"token":   req,
+		})
+	} else {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+	}
+}
+
+func tokenHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	tokenID := r.URL.Path[len("/api/tokens/"):]
+	if tokenID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Token ID is required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPut:
+		var req LoginToken
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request"})
+			return
+		}
+
+		_, err := db.Exec("UPDATE login_tokens SET name = ?, username = ?, auth_type = ?, secret_key = ?, description = ? WHERE id = ?",
+			req.Name, req.Username, req.AuthType, req.SecretKey, req.Description, tokenID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+
+	case http.MethodDelete:
+		_, err := db.Exec("DELETE FROM login_tokens WHERE id = ?", tokenID)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+	}
+}
+
 

@@ -957,6 +957,7 @@
             <div class="nav-item" onclick="showPage('logs')"><span>📝</span><span class="nav-label">系统日志</span></div>
             <div class="nav-item" onclick="showPage('performance')"><span>📈</span><span class="nav-label">性能监控</span></div>
             <div class="nav-item" onclick="showPage('traffic')"><span>📡</span><span class="nav-label">流量分析</span></div>
+            <div class="nav-item" onclick="showPage('tokens')"><span>🔑</span><span class="nav-label">令牌管理</span></div>
             <div class="nav-item" onclick="showPage('settings')"><span>⚙️</span><span class="nav-label">系统设置</span></div>
         </div>
     </div>
@@ -1600,6 +1601,75 @@
                         </div>
                     </form>
                 </div>
+            </div>
+        </div>
+
+        <div id="tokensPage" class="page">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">SSH/Telnet 登录令牌管理</span>
+                    <div class="card-actions">
+                        <button class="btn btn-primary" onclick="showAddTokenModal()">➕ 新增令牌</button>
+                    </div>
+                </div>
+                <div style="overflow-x: auto; padding: 24px;">
+                    <table class="device-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 180px;">令牌名称</th>
+                                <th style="width: 120px;">用户名</th>
+                                <th style="width: 120px;">认证方式</th>
+                                <th style="width: 250px;">密码 / 私钥</th>
+                                <th>描述说明</th>
+                                <th style="width: 150px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tokensTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div id="tokenModal" class="modal-overlay hidden">
+            <div class="modal-box">
+                <div class="modal-header">
+                    <span class="modal-title" id="tokenModalTitle">添加登录令牌</span>
+                    <button class="modal-close" onclick="closeTokenModal()">✕</button>
+                </div>
+                <form id="tokenForm" onsubmit="saveToken(event)">
+                    <input type="hidden" id="tokenID">
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label class="required">令牌名称</label>
+                        <input type="text" id="tokenName" required placeholder="如：核心交换机SSH密码">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label class="required">用户名</label>
+                        <input type="text" id="tokenUsername" required placeholder="如：admin / root">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label class="required">认证方式</label>
+                        <select id="tokenAuthType" onchange="toggleTokenAuthTypeInput()">
+                            <option value="password">密码认证 (Password)</option>
+                            <option value="key">私钥认证 (Private Key)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="tokenSecretKeyGroup" style="margin-bottom: 15px;">
+                        <label class="required">登录密码</label>
+                        <input type="password" id="tokenSecretKey" required placeholder="输入登录密码">
+                    </div>
+                    <div class="form-group hidden" id="tokenPrivateKeyGroup" style="margin-bottom: 15px;">
+                        <label class="required">SSH 私钥内容</label>
+                        <textarea id="tokenPrivateKey" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;..." style="background: var(--bg-dark); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; color: var(--text-primary); font-family: 'Share Tech Mono', monospace; font-size: 13px; outline: none; transition: all 0.2s ease; height: 120px; resize: vertical;"></textarea>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 15px;">
+                        <label>描述说明</label>
+                        <input type="text" id="tokenDescription" placeholder="选填，关于此凭证的使用说明">
+                    </div>
+                    <div class="modal-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeTokenModal()">取消</button>
+                        <button type="submit" class="btn btn-primary" id="tokenSubmitBtn">添加</button>
+                    </div>
+                </form>
             </div>
         </div>
 
@@ -2319,12 +2389,14 @@
                 logs: ['系统日志', '查看系统运行日志'],
                 performance: ['性能监控', '监控系统性能指标'],
                 traffic: ['流量分析', '分析网络流量数据'],
+                tokens: ['令牌管理', '管理设备 SSH/Telnet 登录令牌及私钥'],
                 settings: ['系统设置', '配置系统参数']
             };
             document.getElementById('pageTitle').textContent = titles[page][0];
             document.getElementById('pageDesc').textContent = titles[page][1];
             if (page === 'network') setTimeout(drawTopology, 100);
             if (page === 'devices') setTimeout(renderDevicesTable, 50);
+            if (page === 'tokens') setTimeout(loadTokens, 50);
             if (page === 'settings') {
                 setTimeout(renderDeviceGroupsTable, 50);
                 setTimeout(renderUsersTable, 50);
@@ -2835,6 +2907,210 @@
                 ctx.fillText(node.name.substring(0, 6), x, y + size * 0.25);
             });
         }
+
+        let tokensList = [];
+
+        async function loadTokens() {
+            try {
+                const res = await fetch('/api/tokens');
+                tokensList = await res.json();
+                renderTokensTable();
+            } catch (e) {
+                showToast('加载令牌失败', 'error');
+            }
+        }
+
+        function renderTokensTable() {
+            const tableBody = document.getElementById('tokensTableBody');
+            if (tokensList.length === 0) {
+                tableBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">暂无令牌数据</td></tr>`;
+                return;
+            }
+            tableBody.innerHTML = tokensList.map(t => {
+                const isPassword = t.authType === 'password';
+                let secretDisplay = '';
+                if (isPassword) {
+                    secretDisplay = `<span class="secret-text" data-secret="${t.secretKey}" id="secret-${t.id}">••••••••</span>
+                                     <button onclick="toggleSecretVisibility('${t.id}')" style="background:none; border:none; color:var(--primary); cursor:pointer; margin-left:8px; font-size:12px;">👁️</button>`;
+                } else {
+                    const snippet = t.secretKey.substring(0, 30) + '...';
+                    secretDisplay = `<span style="font-family:monospace; font-size:11px;" title="${t.secretKey}">${snippet}</span>
+                                     <button onclick="showKeyViewerModal('${t.id}')" style="background:none; border:none; color:var(--primary); cursor:pointer; margin-left:8px; font-size:12px;">🔍 查看</button>
+                                     <button onclick="copyToClipboard('${t.id}')" style="background:none; border:none; color:var(--success); cursor:pointer; margin-left:4px; font-size:12px;">📋 复制</button>`;
+                }
+
+                return `
+                    <tr>
+                        <td style="font-weight: 600;">${t.name}</td>
+                        <td><span style="font-family:monospace; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;">${t.username}</span></td>
+                        <td>
+                            <span class="device-status ${isPassword ? 'online' : 'warning'}" style="text-transform: none; padding: 2px 6px;">
+                                ${isPassword ? '密码认证' : '私钥认证'}
+                            </span>
+                        </td>
+                        <td><div style="display:flex; align-items:center;">${secretDisplay}</div></td>
+                        <td style="color: var(--text-secondary);">${t.description || '-'}</td>
+                        <td>
+                            <div class="action-buttons">
+                                <button class="action-btn" onclick="showEditTokenModal('${t.id}')">✏️</button>
+                                <button class="action-btn delete" onclick="deleteToken('${t.id}')">🗑️</button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function toggleSecretVisibility(id) {
+            const span = document.getElementById(`secret-${id}`);
+            if (span.textContent === '••••••••') {
+                span.textContent = span.getAttribute('data-secret');
+            } else {
+                span.textContent = '••••••••';
+            }
+        }
+
+        function showKeyViewerModal(id) {
+            const token = tokensList.find(t => t.id === id);
+            if (token) {
+                alert(`私钥详情 (${token.name}):\n\n${token.secretKey}`);
+            }
+        }
+
+        function copyToClipboard(id) {
+            const token = tokensList.find(t => t.id === id);
+            if (token) {
+                navigator.clipboard.writeText(token.secretKey);
+                showToast('私钥已复制到剪贴板', 'success');
+            }
+        }
+
+        function toggleTokenAuthTypeInput() {
+            const authType = document.getElementById('tokenAuthType').value;
+            const pwdGroup = document.getElementById('tokenSecretKeyGroup');
+            const pwdInput = document.getElementById('tokenSecretKey');
+            const keyGroup = document.getElementById('tokenPrivateKeyGroup');
+            const keyInput = document.getElementById('tokenPrivateKey');
+
+            if (authType === 'password') {
+                pwdGroup.classList.remove('hidden');
+                pwdInput.required = true;
+                keyGroup.classList.add('hidden');
+                keyInput.required = false;
+            } else {
+                pwdGroup.classList.add('hidden');
+                pwdInput.required = false;
+                keyGroup.classList.remove('hidden');
+                keyInput.required = true;
+            }
+        }
+
+        // Token Modal triggers
+        function showAddTokenModal() {
+            document.getElementById('tokenModalTitle').textContent = '添加登录令牌';
+            document.getElementById('tokenID').value = '';
+            document.getElementById('tokenName').value = '';
+            document.getElementById('tokenUsername').value = '';
+            document.getElementById('tokenAuthType').value = 'password';
+            document.getElementById('tokenSecretKey').value = '';
+            document.getElementById('tokenPrivateKey').value = '';
+            document.getElementById('tokenDescription').value = '';
+            toggleTokenAuthTypeInput();
+            document.getElementById('tokenModal').classList.remove('hidden');
+        }
+
+        function showEditTokenModal(id) {
+            const token = tokensList.find(t => t.id === id);
+            if (!token) return;
+
+            document.getElementById('tokenModalTitle').textContent = '编辑登录令牌';
+            document.getElementById('tokenID').value = token.id;
+            document.getElementById('tokenName').value = token.name;
+            document.getElementById('tokenUsername').value = token.username;
+            document.getElementById('tokenAuthType').value = token.authType;
+            document.getElementById('tokenDescription').value = token.description || '';
+            
+            if (token.authType === 'password') {
+                document.getElementById('tokenSecretKey').value = token.secretKey;
+                document.getElementById('tokenPrivateKey').value = '';
+            } else {
+                document.getElementById('tokenSecretKey').value = '';
+                document.getElementById('tokenPrivateKey').value = token.secretKey;
+            }
+
+            toggleTokenAuthTypeInput();
+            document.getElementById('tokenModal').classList.remove('hidden');
+        }
+
+        function closeTokenModal() {
+            document.getElementById('tokenModal').classList.add('hidden');
+        }
+
+        async function saveToken(event) {
+            event.preventDefault();
+            const id = document.getElementById('tokenID').value;
+            const name = document.getElementById('tokenName').value.trim();
+            const username = document.getElementById('tokenUsername').value.trim();
+            const authType = document.getElementById('tokenAuthType').value;
+            const description = document.getElementById('tokenDescription').value.trim();
+            
+            let secretKey = '';
+            if (authType === 'password') {
+                secretKey = document.getElementById('tokenSecretKey').value;
+            } else {
+                secretKey = document.getElementById('tokenPrivateKey').value;
+            }
+
+            const payload = { name, username, authType, secretKey, description };
+
+            try {
+                let res;
+                if (id) {
+                    res = await fetch(`/api/tokens/${id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                } else {
+                    res = await fetch('/api/tokens', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                }
+
+                const result = await res.json();
+                if (result.success) {
+                    showToast(id ? '修改成功' : '添加成功', 'success');
+                    closeTokenModal();
+                    loadTokens();
+                } else {
+                    showToast('保存失败', 'error');
+                }
+            } catch (e) {
+                showToast('保存失败: 网络错误', 'error');
+            }
+        }
+
+        async function deleteToken(id) {
+            if (!confirm('确定要删除该登录令牌吗？')) return;
+
+            try {
+                const res = await fetch(`/api/tokens/${id}`, {
+                    method: 'DELETE'
+                });
+                const result = await res.json();
+                if (result.success) {
+                    showToast('删除成功', 'success');
+                    loadTokens();
+                } else {
+                    showToast('删除失败', 'error');
+                }
+            } catch (e) {
+                showToast('删除失败: 网络错误', 'error');
+            }
+        }
+
         window.addEventListener('resize', () => {
             drawTrafficChart();
             drawPerformanceChart();
