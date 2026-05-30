@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebShell - 网络管理系统</title>
+    <style>
+        :root {
+            --bg-dark: #0d1117;
+            --bg-card: #161b22;
+            --border: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --primary: #00f0ff;
+            --success: #3fb950;
+            --danger: #ff4757;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 24px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #00f0ff, #7b2dff);
+            color: var(--bg-dark);
+        }
+        .btn-secondary {
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+        .btn-danger {
+            background: rgba(255, 71, 87, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(255, 71, 87, 0.3);
+        }
+        .btn:hover {
+            opacity: 0.9;
+        }
+        .config-panel {
+            display: flex;
+            gap: 16px;
+            padding: 16px 24px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+        }
+        .config-panel select,
+        .config-panel input {
+            padding: 8px 12px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        .terminal-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+        }
+        .terminal {
+            flex: 1;
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            font-family: 'Share Tech Mono', 'Consolas', monospace;
+            font-size: 14px;
+            color: var(--success);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .terminal-content {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .command-line {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .prompt {
+            color: var(--primary);
+        }
+        .command-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-primary);
+            font-family: 'Share Tech Mono', 'Consolas', monospace;
+            font-size: 14px;
+        }
+        .output-line {
+            margin: 4px 0;
+            white-space: pre-wrap;
+        }
+        .system-info {
+            color: var(--text-secondary);
+        }
+        .error-text {
+            color: var(--danger);
+        }
+        .success-text {
+            color: var(--success);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h2>🖥️ WebShell</h2>
+            <span id="deviceTitle" class="system-info"></span>
+        </div>
+        <div class="header-right">
+            <button class="btn btn-danger" onclick="disconnectShell()">断开连接</button>
+            <button class="btn btn-secondary" onclick="window.close()">关闭窗口</button>
+        </div>
+    </div>
+
+    <div class="config-panel">
+        <select id="shellProtocol">
+            <option value="telnet">Telnet</option>
+            <option value="ssh">SSH</option>
+        </select>
+        <input type="number" id="shellPort" value="23" placeholder="端口">
+        <input type="text" id="shellUsername" value="admin" placeholder="用户名">
+        <input type="password" id="shellPassword" placeholder="密码">
+        <button class="btn btn-primary" onclick="connectShell()">连接</button>
+    </div>
+
+    <div class="terminal-container">
+        <div class="terminal" id="terminal">
+            <div class="terminal-content" id="terminalContent">
+                <div class="output-line system-info">欢迎使用 WebShell</div>
+                <div class="output-line system-info">设备: <span id="deviceName"></span></div>
+                <div class="output-line system-info">IP: <span id="deviceIP"></span></div>
+                <div class="output-line system-info">------------------------</div>
+                <div class="output-line">$ 请点击"连接"按钮连接设备</div>
+            </div>
+            <div class="command-line">
+                <span class="prompt">$</span>
+                <input type="text" class="command-input" id="commandInput" placeholder="输入命令..." onkeydown="handleKeyDown(event)">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let deviceId = '';
+        let deviceInfo = {};
+        let shellConnected = false;
+
+        function getQueryParam(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        async function loadDeviceInfo() {
+            deviceId = getQueryParam('deviceId');
+            if (!deviceId) {
+                appendOutput('错误: 未指定设备', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/devices/${deviceId}/webshell`);
+                deviceInfo = await res.json();
+                
+                document.getElementById('deviceName').textContent = deviceInfo.name || '未知设备';
+                document.getElementById('deviceIP').textContent = deviceInfo.ip || '未知IP';
+                document.getElementById('deviceTitle').textContent = `${deviceInfo.name || '未知设备'} (${deviceInfo.ip || '未知IP'})`;
+                
+                if (deviceInfo.loginPassword) {
+                    document.getElementById('shellPassword').value = deviceInfo.loginPassword;
+                }
+            } catch (e) {
+                appendOutput('加载设备信息失败', 'error');
+            }
+        }
+
+        function appendOutput(text, type = 'normal') {
+            const content = document.getElementById('terminalContent');
+            const line = document.createElement('div');
+            line.className = `output-line ${type === 'error' ? 'error-text' : type === 'success' ? 'success-text' : ''}`;
+            line.textContent = text;
+            content.appendChild(line);
+            content.scrollTop = content.scrollHeight;
+        }
+
+        function clearInput() {
+            document.getElementById('commandInput').value = '';
+        }
+
+        async function connectShell() {
+            if (shellConnected) {
+                appendOutput('已连接，如需重新连接请先断开', 'error');
+                return;
+            }
+
+            const protocol = document.getElementById('shellProtocol').value;
+            const port = document.getElementById('shellPort').value;
+            const username = document.getElementById('shellUsername').value;
+            const password = document.getElementById('shellPassword').value;
+
+            appendOutput(`$ 正在连接 ${protocol}://${deviceInfo.ip}:${port}...`);
+
+            try {
+                const res = await fetch(`/api/devices/${deviceId}/webshell/connect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        protocol,
+                        port: parseInt(port),
+                        username,
+                        password
+                    })
+                });
+                
+                const result = await res.json();
+                if (result.success) {
+                    appendOutput('$ 连接成功', 'success');
+                    shellConnected = true;
+                } else {
+                    appendOutput(`$ 连接失败: ${result.message}`, 'error');
+                }
+            } catch (e) {
+                appendOutput(`$ 连接失败: ${e.message}`, 'error');
+            }
+        }
+
+        async function sendCommand() {
+            if (!shellConnected) {
+                appendOutput('请先连接设备', 'error');
+                return;
+            }
+
+            const command = document.getElementById('commandInput').value.trim();
+            if (!command) return;
+
+            appendOutput(`$ ${command}`);
+            clearInput();
+
+            try {
+                const res = await fetch(`/api/devices/${deviceId}/webshell/command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command })
+                });
+                
+                const result = await res.json();
+                if (result.success) {
+                    appendOutput(result.output || '(无输出)');
+                } else {
+                    appendOutput(`错误: ${result.message}`, 'error');
+                }
+            } catch (e) {
+                appendOutput(`发送失败: ${e.message}`, 'error');
+            }
+        }
+
+        function disconnectShell() {
+            if (!shellConnected) {
+                appendOutput('未连接设备', 'error');
+                return;
+            }
+
+            appendOutput('$ 正在断开连接...');
+            shellConnected = false;
+            appendOutput('$ 已断开连接', 'success');
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                sendCommand();
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', loadDeviceInfo);
+    </script>
+</body>
+</html>
