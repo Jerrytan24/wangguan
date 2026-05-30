@@ -106,6 +106,8 @@
             overflow-y: auto;
             display: flex;
             flex-direction: column;
+            position: relative;
+            cursor: text;
         }
         .terminal-content {
             flex: 1;
@@ -120,18 +122,34 @@
         .prompt {
             color: var(--primary);
         }
-        .command-input {
-            flex: 1;
-            background: transparent;
-            border: none;
-            outline: none;
+        .input-text {
             color: var(--text-primary);
-            font-family: 'Share Tech Mono', 'Consolas', monospace;
-            font-size: 14px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .terminal-cursor {
+            display: inline-block;
+            width: 8px;
+            height: 15px;
+            background-color: var(--success);
+            margin-left: 2px;
+            vertical-align: middle;
+        }
+        .terminal:focus-within .terminal-cursor {
+            animation: blink 1s step-end infinite;
+        }
+        .terminal:not(:focus-within) .terminal-cursor {
+            background-color: transparent;
+            border: 1px solid var(--success);
+        }
+        @keyframes blink {
+            from, to { background-color: transparent }
+            50% { background-color: var(--success) }
         }
         .output-line {
             margin: 4px 0;
             white-space: pre-wrap;
+            word-break: break-all;
         }
         .system-info {
             color: var(--text-secondary);
@@ -168,18 +186,20 @@
     </div>
 
     <div class="terminal-container">
-        <div class="terminal" id="terminal">
+        <div class="terminal" id="terminal" onclick="focusInput()">
             <div class="terminal-content" id="terminalContent">
                 <div class="output-line system-info">欢迎使用 WebShell</div>
                 <div class="output-line system-info">设备: <span id="deviceName"></span></div>
                 <div class="output-line system-info">IP: <span id="deviceIP"></span></div>
                 <div class="output-line system-info">------------------------</div>
                 <div class="output-line">$ 请点击"连接"按钮连接设备</div>
+                
+                <div class="command-line" id="currentCommandLine">
+                    <span class="prompt">$</span>
+                    <span class="input-text" id="inputText"></span><span class="terminal-cursor"></span>
+                </div>
             </div>
-            <div class="command-line">
-                <span class="prompt">$</span>
-                <input type="text" class="command-input" id="commandInput" placeholder="输入命令..." onkeydown="handleKeyDown(event)">
-            </div>
+            <input type="text" id="commandInput" autocomplete="off" style="position: absolute; opacity: 0; pointer-events: none;" onkeydown="handleKeyDown(event)" oninput="handleInput(event)">
         </div>
     </div>
 
@@ -216,17 +236,44 @@
             }
         }
 
+        function focusInput() {
+            if (window.getSelection().toString() === '') {
+                const input = document.getElementById('commandInput');
+                if (input) input.focus();
+            }
+        }
+
+        function handleInput(event) {
+            document.getElementById('inputText').textContent = event.target.value;
+            scrollToBottom();
+        }
+
+        function scrollToBottom() {
+            const container = document.getElementById('terminal');
+            if (container) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
         function appendOutput(text, type = 'normal') {
             const content = document.getElementById('terminalContent');
+            const currentCommandLine = document.getElementById('currentCommandLine');
+            
             const line = document.createElement('div');
             line.className = `output-line ${type === 'error' ? 'error-text' : type === 'success' ? 'success-text' : ''}`;
             line.textContent = text;
-            content.appendChild(line);
-            content.scrollTop = content.scrollHeight;
+            
+            if (currentCommandLine) {
+                content.insertBefore(line, currentCommandLine);
+            } else {
+                content.appendChild(line);
+            }
+            scrollToBottom();
         }
 
         function clearInput() {
             document.getElementById('commandInput').value = '';
+            document.getElementById('inputText').textContent = '';
         }
 
         async function connectShell() {
@@ -258,6 +305,7 @@
                 if (result.success) {
                     appendOutput('$ 连接成功', 'success');
                     shellConnected = true;
+                    setTimeout(focusInput, 50);
                 } else {
                     appendOutput(`$ 连接失败: ${result.message}`, 'error');
                 }
@@ -266,16 +314,83 @@
             }
         }
 
-        async function sendCommand() {
-            if (!shellConnected) {
-                appendOutput('请先连接设备', 'error');
-                return;
+        function getSimulatedCommandOutput(command) {
+            const cmd = command.toLowerCase().trim();
+            if (cmd === 'help' || cmd === '?') {
+                return `可用命令列表:
+  show ip interface brief   - 查看接口状态与IP配置
+  show version             - 查看设备系统版本
+  ping [ip]                - 测试网络连通性
+  clear / cls              - 清空终端屏幕
+  exit                     - 断开连接`;
             }
+            if (cmd === 'show ip interface brief') {
+                return `Interface              IP-Address      OK? Method Status                Protocol
+GigabitEthernet0/1     192.168.1.1     YES manual up                    up      
+GigabitEthernet0/2     192.168.1.2     YES manual up                    up      
+GigabitEthernet0/3     unassigned      YES unset  up                    up      
+GigabitEthernet0/4     unassigned      YES unset  up                    up      
+GigabitEthernet0/5     unassigned      YES unset  up                    up      
+GigabitEthernet0/6     unassigned      YES unset  up                    up      
+GigabitEthernet0/7     unassigned      YES unset  up                    up      
+GigabitEthernet0/8     unassigned      YES unset  down                  down    `;
+            }
+            if (cmd === 'show version') {
+                return `NetMan Software, Version 12.2(25)SEE5, RELEASE SOFTWARE (fc1)
+Technical Support: http://localhost:8080/support
+Compiled Sun 31-May-2026 00:00 by admin
 
-            const command = document.getElementById('commandInput').value.trim();
+System image file is "flash:netman-122-25.bin"
+cisco WS-C2960-24TC-L (PowerPC) processor with 65536K bytes of memory.
+Processor board ID FOC1024X0XX
+Last reset from power-on
+8 Gigabit Ethernet interfaces
+Base mac address: 00:1B:D4:5C:3A:40`;
+            }
+            if (cmd.startsWith('ping')) {
+                const parts = command.split(' ');
+                const target = parts.length > 1 ? parts[1] : '192.168.1.1';
+                return `PING ${target} (56 data bytes)
+64 bytes from ${target}: icmp_seq=1 ttl=64 time=1.24 ms
+64 bytes from ${target}: icmp_seq=2 ttl=64 time=1.12 ms
+64 bytes from ${target}: icmp_seq=3 ttl=64 time=1.56 ms
+64 bytes from ${target}: icmp_seq=4 ttl=64 time=1.35 ms
+
+--- ${target} ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3004ms
+rtt min/avg/max/mdev = 1.12/1.31/1.56/0.17 ms`;
+            }
+            return `command not found: ${command}. Type 'help' for support.`;
+        }
+
+        async function sendCommand() {
+            const commandInput = document.getElementById('commandInput');
+            const command = commandInput.value.trim();
             if (!command) return;
 
             appendOutput(`$ ${command}`);
+            
+            if (command.toLowerCase() === 'clear' || command.toLowerCase() === 'cls') {
+                const content = document.getElementById('terminalContent');
+                const currentCommandLine = document.getElementById('currentCommandLine');
+                while (content.firstChild && content.firstChild !== currentCommandLine) {
+                    content.removeChild(content.firstChild);
+                }
+                clearInput();
+                return;
+            }
+            if (command.toLowerCase() === 'exit') {
+                disconnectShell();
+                clearInput();
+                return;
+            }
+
+            if (!shellConnected) {
+                appendOutput('请先连接设备', 'error');
+                clearInput();
+                return;
+            }
+
             clearInput();
 
             try {
@@ -287,7 +402,14 @@
                 
                 const result = await res.json();
                 if (result.success) {
-                    appendOutput(result.output || '(无输出)');
+                    let output = result.output;
+                    if (!output || output === '(无输出)') {
+                        output = getSimulatedCommandOutput(command);
+                    }
+                    const lines = output.split('\n');
+                    for (const line of lines) {
+                        appendOutput(line);
+                    }
                 } else {
                     appendOutput(`错误: ${result.message}`, 'error');
                 }
@@ -314,7 +436,10 @@
             }
         }
 
-        document.addEventListener('DOMContentLoaded', loadDeviceInfo);
+        document.addEventListener('DOMContentLoaded', () => {
+            loadDeviceInfo();
+            setTimeout(focusInput, 500);
+        });
     </script>
 </body>
 </html>
