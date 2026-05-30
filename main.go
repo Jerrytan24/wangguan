@@ -376,6 +376,8 @@ func main() {
 			testDeviceHandler(w, r)
 		} else if strings.Contains(r.URL.Path, "/oid") {
 			deviceOIDHandler(w, r)
+		} else if strings.Contains(r.URL.Path, "/interfaces") {
+			deviceInterfacesHandler(w, r)
 		} else {
 			deviceHandler(w, r)
 		}
@@ -1304,3 +1306,41 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	response := map[string]string{"success": "true", "token": "mock-token"}
 	json.NewEncoder(w).Encode(response)
 }
+
+func deviceInterfacesHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Method not allowed"})
+		return
+	}
+
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 5 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid URL"})
+		return
+	}
+	deviceID := parts[3]
+
+	var d Device
+	err := db.QueryRow("SELECT id, name, ip, read_only_community, snmp_port, collect_interval, snmp_timeout, snmp_retry FROM devices WHERE id = ?", deviceID).Scan(
+		&d.ID, &d.Name, &d.IP, &d.ReadOnlyCommunity, &d.SNMPPort, &d.CollectInterval, &d.SNMPTimeout, &d.SNMPRetry)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Device not found"})
+		return
+	}
+
+	interfaces, err := GetDeviceInterfaces(d.IP, d.ReadOnlyCommunity, d.SNMPTimeout, d.SNMPRetry, d.ID)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(interfaces)
+}
+
